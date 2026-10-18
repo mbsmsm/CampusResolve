@@ -1,0 +1,68 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function userDoc(userId) {
+      return /databases/$(database)/documents/users/$(userId);
+    }
+
+    function isAdmin() {
+      return isSignedIn() && 
+             exists(userDoc(request.auth.uid)) &&
+             get(userDoc(request.auth.uid)).data.get('role', 'student') == 'admin';
+    }
+
+    // ==========================================
+    // USERS COLLECTION
+    // ==========================================
+    match /users/{userId} {
+      // Authenticated users can read their own profile; Admins can read any profile
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+
+      // SECURITY RULE: Public registration can NEVER set role to 'admin'
+      // New users can only create their own profile with role strictly set to 'student'
+      allow create: if isOwner(userId)
+                    && request.resource.data.get('role', '') == 'student'
+                    && request.resource.data.get('uid', '') == userId;
+
+      // Users cannot change their own role or privileges. Only admins can modify user roles.
+      allow update: if (isOwner(userId) && request.resource.data.get('role', '') == resource.data.get('role', 'student'))
+                    || isAdmin();
+
+      // Only admins can delete user records
+      allow delete: if isAdmin();
+    }
+
+    // ==========================================
+    // COMPLAINTS COLLECTION
+    // ==========================================
+    match /complaints/{complaintId} {
+      // Students can ONLY read their own complaints; Admins can read all complaints
+      allow read: if isSignedIn() && (
+        resource.data.studentId == request.auth.uid || isAdmin()
+      );
+
+      // Students can submit complaints:
+      // Must be authenticated, studentId must match their auth UID, and initial status must be 'Pending'
+      allow create: if isSignedIn()
+                    && request.resource.data.studentId == request.auth.uid
+                    && request.resource.data.status == 'Pending';
+
+      // Status updates and remarks: ONLY Admins can update complaints
+      // Students cannot modify status or tamper with complaints once submitted
+      allow update: if isAdmin();
+
+      // Only admins can delete complaints
+      allow delete: if isAdmin();
+    }
+  }
+}
